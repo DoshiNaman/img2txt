@@ -1,113 +1,245 @@
-import Image from "next/image";
+"use client"
+
+import { useEffect, useRef, useState } from "react"
+import clsx from "clsx"
+import { IconCopy, IconLoader2 } from "@tabler/icons-react"
+import { useCompletion } from "ai/react"
+import { toast } from "sonner"
+import Image from "next/image"
+import { isSupportedImageType } from "@/app/utils"
+import { track } from "@vercel/analytics"
 
 export default function Home() {
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 w-full max-w-5xl items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:size-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{" "}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
-        </div>
-      </div>
+  const [isDraggingOver, setIsDraggingOver] = useState(false)
+  const [blobURL, setBlobURL] = useState<string | null>(null)
+  const [finished, setFinished] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const { complete, completion, isLoading } = useCompletion({
+    onError: (e) => {
+      toast.error(e.message)
+      setBlobURL(null)
+    },
+    onFinish: () => setFinished(true),
+  })
 
-      <div className="relative z-[-1] flex place-items-center before:absolute before:h-[300px] before:w-full before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-full after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 sm:before:w-[480px] sm:after:w-[240px] before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
+  async function submit(file?: File | Blob) {
+    if (!file) return
+
+    if (!isSupportedImageType(file.type)) {
+      return toast.error("Unsupported format. Only JPEG, PNG, GIF, and WEBP files are supported.")
+    }
+
+    if (file.size > 4.5 * 1024 * 1024) {
+      return toast.error("Image too large, maximum file size is 4.5MB.")
+    }
+
+    const base64 = await toBase64(file)
+
+    // roughly 4.5MB in base64
+    if (base64.length > 6_464_471) {
+      return toast.error("Image too large, maximum file size is 4.5MB.")
+    }
+
+    setBlobURL(URL.createObjectURL(file))
+    setFinished(false)
+    complete(base64)
+  }
+
+  function handleDragLeave() {
+    setIsDraggingOver(false)
+  }
+
+  function handleDragOver(e: DragEvent) {
+    setIsDraggingOver(true)
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+  }
+
+  async function handleDrop(e: DragEvent) {
+    track("Drop")
+
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+
+    const file = e.dataTransfer?.files?.[0]
+    submit(file)
+  }
+
+  useEffect(() => {
+    addEventListener("paste", handlePaste)
+    addEventListener("drop", handleDrop)
+    addEventListener("dragover", handleDragOver)
+    addEventListener("dragleave", handleDragLeave)
+
+    return () => {
+      removeEventListener("paste", handlePaste)
+      removeEventListener("drop", handleDrop)
+      removeEventListener("dragover", handleDragOver)
+      removeEventListener("dragleave", handleDragLeave)
+    }
+  })
+
+  async function handlePaste(e: ClipboardEvent) {
+    track("Paste")
+    const file = e.clipboardData?.files?.[0]
+    submit(file)
+  }
+
+  async function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    track("Upload")
+    const file = e.target.files?.[0]
+    submit(file)
+  }
+
+  const [description, text] = completion.split("▲")
+
+  function copyBoth() {
+    navigator.clipboard.writeText([description.trim(), text.trim()].join("\n\n"))
+    toast.success("Copied to clipboard")
+  }
+
+  return (
+    <>
+      <div
+        className={clsx(
+          "rounded-lg border-4 drop-shadow-sm text-gray-700 dark:text-gray-300 cursor-pointer border-dashed transition-colors ease-in-out bg-gray-100 dark:bg-gray-900 relative group select-none grow pointer-events-none [@media(hover:hover)]:pointer-events-auto",
+          {
+            "border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700":
+              !isDraggingOver,
+            "border-blue-300 dark:border-blue-700": isDraggingOver,
+          }
+        )}
+        onClick={() => inputRef.current?.click()}
+      >
+        {blobURL && (
+          <Image
+            src={blobURL}
+            unoptimized
+            fill
+            className="lg:object-contain object-cover min-h-16"
+            alt="Uploaded image"
+          />
+        )}
+
+        <div
+          className={clsx(
+            "flex flex-col w-full h-full p-3 items-center justify-center text-center absolute bg-gray-100/70 dark:bg-gray-900/70 text-lg",
+            {
+              "opacity-0 group-hover:opacity-100 transition ease-in-out": completion,
+            }
+          )}
+        >
+          {isLoading ? (
+            <IconLoader2 className="animate-spin size-12" />
+          ) : (
+            <>
+              <p className="font-bold mb-4">Image to text, fast.</p>
+              <p className="hidden [@media(hover:hover)]:block">
+                Drop or paste anywhere, or click to upload.
+              </p>
+
+              <div className="w-56 space-y-4 [@media(hover:hover)]:hidden pointer-events-auto">
+                <button className="rounded-full w-full py-3 bg-black dark:bg-white text-white dark:text-black">
+                  Tap to upload
+                </button>
+
+                <input
+                  type="text"
+                  onKeyDown={(e) => e.preventDefault()}
+                  placeholder="Hold to paste"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-center w-full rounded-full py-3 bg-gray-200 dark:bg-gray-800 placeholder-black dark:placeholder-white focus:bg-white dark:focus:bg-black focus:placeholder-gray-700 dark:focus:placeholder-gray-300 transition-colors ease-in-out focus:outline-none border-2 focus:border-blue-300 dark:focus:border-blue-700 border-transparent"
+                />
+              </div>
+
+              <p className="text-sm mt-3 text-gray-700 dark:text-gray-300">
+                (images are not stored)
+              </p>
+            </>
+          )}
+        </div>
+
+        <input
+          type="file"
+          className="hidden"
+          ref={inputRef}
+          onChange={handleInputChange}
+          accept="image/jpeg, image/png, image/gif, image/webp"
         />
       </div>
 
-      <div className="mb-32 grid text-center lg:mb-0 lg:w-full lg:max-w-5xl lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className="mb-3 text-2xl font-semibold">
-            Docs{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className="m-0 max-w-[30ch] text-sm opacity-50">
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
+      {(isLoading || completion) && (
+        <div className="space-y-3 basis-1/2 p-3 rounded-md bg-gray-100 dark:bg-gray-900 w-full drop-shadow-sm">
+          <Section finished={finished} content={description}>
+            Description
+          </Section>
+          <Section finished={finished} content={text}>
+            Text
+          </Section>
+          {finished && text && (
+            <button
+              onClick={copyBoth}
+              className="w-full lg:w-auto rounded-md underline hover:no-underline hover:bg-gray-200 dark:hover:bg-gray-800 flex items-center gap-2"
+            >
+              <IconCopy className="size-4" /> Copy All
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
 
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className="mb-3 text-2xl font-semibold">
-            Learn{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className="m-0 max-w-[30ch] text-sm opacity-50">
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
+function toBase64(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = () => {
+      if (typeof reader.result !== "string") return
+      resolve(reader.result)
+    }
+    reader.onerror = (error) => reject(error)
+  })
+}
 
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className="mb-3 text-2xl font-semibold">
-            Templates{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className="m-0 max-w-[30ch] text-sm opacity-50">
-            Explore starter templates for Next.js.
-          </p>
-        </a>
+function Section({
+  children,
+  content,
+  finished,
+}: {
+  children: string
+  content?: string
+  finished: boolean
+}) {
+  function copy() {
+    navigator.clipboard.writeText(content || "")
+    toast.success("Copied to clipboard")
+  }
 
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
+  const loading = !content && !finished
+
+  return (
+    <div>
+      {content && (
+        <button
+          className="float-right rounded-md p-1 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors ease-in-out"
+          onClick={copy}
+          aria-label="Copy to clipboard"
         >
-          <h2 className="mb-3 text-2xl font-semibold">
-            Deploy{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className="m-0 max-w-[30ch] text-balance text-sm opacity-50">
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  );
+          <IconCopy />
+        </button>
+      )}
+      <h2 className="font-semibold select-none text-gray-600 dark:text-gray-400">{children}</h2>
+
+      {loading && <div className="bg-gray-200 dark:bg-gray-800 animate-pulse rounded w-full h-6" />}
+      {content && <p className="whitespace-pre-wrap break-words">{content.trim()}</p>}
+      {finished && !content && (
+        <p className="text-gray-600 dark:text-gray-400 select-none">
+          No text was found in that image.
+        </p>
+      )}
+    </div>
+  )
 }
